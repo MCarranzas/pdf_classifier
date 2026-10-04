@@ -1,0 +1,856 @@
+================================================================================
+ PDF CLASSIFIER - FUNCIONAMIENTO GENERAL DEL SISTEMA
+ Documento de referencia tecnica  (version 2)
+================================================================================
+
+  Actualizado: 30/09/2026
+  Alcance: flujo completo desde la carga de un PDF hasta su clasificacion,
+  tecnologias empleadas, mecanismo de conexion frontend-backend y catalogo
+  de endpoints.
+  Version anterior conservada en: funcionamiento_v1_anterior.txt
+
+  Cambios respecto a la version 1:
+    - Se documento el filtro por estado, que paso de 3 botones toggle a un
+      desplegable (Select) con 4 opciones.
+    - Se documento el nuevo componente frontend/src/components/ui/select.jsx.
+    - Se corrigieron todos los numeros de linea de App.jsx (el archivo crecio
+      de 1043 a 1074 lineas por el cambio anterior).
+    - Se corrigieron las referencias de App.jsx:191 (login/registro, antes
+      citadas como :169) y de main.py:44 (health, antes :43).
+
+
+--------------------------------------------------------------------------------
+  1. RESUMEN
+--------------------------------------------------------------------------------
+
+El sistema es una aplicacion web para clasificar automaticamente documentos PDF
+en tres categorias: FACTURA, CONTRATO y FORMULARIO 110.
+
+El usuario se autentica, sube un "lote" de hasta 5 PDFs en una sola peticion y el
+servidor analiza el TEXTO DE LA PRIMERA PAGINA de cada PDF para determinar la
+categoria, un nivel de confianza, un motivo legible y si el documento requiere
+revision humana. Los archivos se guardan en disco y los metadatos en MySQL/
+MariaDB. El usuario despues revisa los resultados en una tabla, puede filtrarlos
+por estado, abre cada PDF en un visor integrado en la pagina (con las palabras
+clave resaltadas sobre el texto) y aprueba o rechaza cada documento.
+
+El administrador ademas dispone de un panel con la distribucion global de
+clasificaciones y la gestion de usuarios y roles.
+
+
+--------------------------------------------------------------------------------
+  2. ARQUITECTURA
+--------------------------------------------------------------------------------
+
+   Navegador (React 19 + Vite)
+            |
+            |  HTTP / JSON  +  multipart/form-data
+            |  Authorization: Bearer <JWT>
+            |  rutas relativas: /api/...
+            v
+   Proxy de Vite (server.proxy)  ---->  FastAPI (Uvicorn, puerto 8000)
+   127.0.0.1:5173 -> 127.0.0.1:8000                 |
+                                                  |---> MySQL / MariaDB (3306)
+                                                  |         usuarios, roles, lotes,
+                                                  |         documentos
+                                                  |
+                                                  |---> Disco: backend/uploads/<lote_id>/*.pdf
+                                                  |
+                                                  `---> API de IA (OpenAI-compatible)
+                                                        https://opencode.ai/zen/v1
+                                                        modelo: big-pickle
+
+Todo es REST request/response. No hay WebSockets, ni socket.io, ni SSE, ni cola
+de mensajes. La unica comunicacion en tiempo real es el refresco de la interfaz
+tras cada respuesta del servidor.
+
+
+--------------------------------------------------------------------------------
+  3. TECNOLOGIAS UTILIZADAS
+--------------------------------------------------------------------------------
+
+3.1 FRONTEND  (carpeta: frontend/)
+--------------------------------------------------------------------------------
+  - React 19.2                 biblioteca de UI, componentes funcionales
+  - Vite 8.3                   bundler y servidor de desarrollo
+  - @vitejs/plugin-react       soporte de JSX y Fast Refresh
+  - Tailwind CSS 4.3           estilos utility-first (@tailwindcss/vite)
+  - shadcn/ui + radix-ui 1.6   componentes accesibles (Button, Card, Dialog,
+                               Table, Badge, Input, Label, Progress, Select,
+                               Separator)
+  - lucide-react               iconos
+  - sonner 2                   notificaciones (toasts)
+  - class-variance-authority / cn / tw-animate-css   utilidades de estilos
+  - next-themes                soporte de tema (estructura preparada)
+  - pdfjs-dist 6.3             renderizado del PDF en el navegador (visor)
+  - @fontsource-variable/geist  tipografia
+  - oxlint                     linter
+
+  No se usa axios ni ninguna variable de entorno (VITE_*/REACT_APP_*). El cliente
+  HTTP es la funcion fetch() nativa del navegador. Tampoco hay capa de servicios
+  ni hooks de datos: las llamadas viven dentro de App.jsx y PdfViewerDialog.jsx.
+
+  Nota sobre shadcn/ui: los componentes de components/ui/ estan escritos a mano
+  con el estilo "radix-nova" (importan de "radix-ui" y de "cn"), no generados por
+  el CLI de shadcn. select.jsx se escribio siguiendo esa misma convencion. Los
+  paquetes de Radix ya estaban instalados, por lo que anadir componentes no
+  exige instalar dependencias nuevas.
+
+3.2 BACKEND  (carpeta: backend/)
+--------------------------------------------------------------------------------
+  - Python 3.14 (entorno virtual en backend/venv)
+  - FastAPI 0.141             framework ASGI con documentacion OpenAPI
+                              automatica en /docs
+  - Uvicorn 0.53              servidor ASGI (puerto 8000 por defecto)
+  - Starlette 1.7             base de FastAPI (CORS, middleware)
+  - SQLAlchemy 2.0.54         ORM (DeclarativeBase, Mapped, mapped_column)
+  - PyMySQL 1.2.3             driver MySQL/MariaDB
+  - cryptography 45           soporte de cifrado TLS/auth de MySQL
+  - Pydantic 2.13             validacion y serializacion
+  - pydantic-settings 2.15    carga de configuracion desde .env
+  - python-dotenv 1.2.3       lectura del .env
+  - PyPDF2 3.0.1              extraccion del texto de la primera pagina
+  - pycryptodome 3.23         dependencia de cifrado de PyPDF2
+  - PyJWT 2.15                emision y verificacion de tokens JWT
+  - bcrypt 4.x                hash de contrasenas
+  - python-multipart 0.0.32   parsing de multipart/form-data (subida de archivos)
+  - urllib.request (stdlib)    cliente HTTP hacia la API de IA
+
+  No se usa Alembic: las migraciones de esquema estan escritas a mano en
+  backend/app/database.py y se ejecutan al arrancar.
+
+3.3 BASE DE DATOS
+--------------------------------------------------------------------------------
+  - MySQL / MariaDB
+  - Motor: InnoDB, charset utf8mb4, collation utf8mb4_unicode_ci
+  - Base: pdf_classifier (127.0.0.1:3306)
+
+3.4 INTELIGENCIA ARTIFICIAL
+--------------------------------------------------------------------------------
+  - API compatible con OpenAI, endpoint POST {AI_BASE_URL}/chat/completions
+  - Configuracion actual: https://opencode.ai/zen/v1, modelo "big-pickle"
+  - Se invoca con la libreria estandar urllib.request (sin requests ni httpx)
+  - temperature 0, max_tokens 300, response_format {"type":"json_object"}
+  - Es OPCIONAL: si AI_PROVIDER esta en "disabled"/"" o falla la llamada, el
+    sistema cae automaticamente a un clasificador por palabras clave.
+
+
+--------------------------------------------------------------------------------
+  4. ESTRUCTURA DE ARCHIVOS
+--------------------------------------------------------------------------------
+
+pdf_classifier/
+|-- backend/
+|   |-- .env                       configuracion (incluye secretos)
+|   |-- requirements.txt
+|   |-- venv/                      entorno virtual
+|   |-- test_upload.py             script de prueba de integracion
+|   |-- test_estados.py            script de prueba de estados
+|   |-- pdf_classifier.sql         dump de la base
+|   |-- respaldo_*.sql             respaldos automaticos de migraciones
+|   `-- app/
+|       |-- main.py                ASGI app, CORS, inclusion de routers, lifespan
+|       |-- config.py              Settings (pydantic-settings)
+|       |-- database.py            engine, SessionLocal, migraciones, get_db
+|       |-- security.py            bcrypt, JWT, dependencias de auth
+|       |-- bootstrap.py           semilla de roles y promocion a admin
+|       |-- models/                ORM: batch.py, document.py, role.py, user.py
+|       |-- schemas/               Pydantic: auth.py, document.py
+|       |-- routers/               auth.py, batches.py, documents.py, admin.py
+|       `-- services/              pdf_text.py, classifier.py, llm_client.py
+|-- frontend/
+|   |-- vite.config.js             plugins, alias @ y PROXY /api -> :8000
+|   |-- package.json
+|   `-- src/
+|       |-- main.jsx               punto de montaje + <Toaster/>
+|       |-- App.jsx                toda la aplicacion (1074 lineas)
+|       |-- index.css
+|       |-- components/
+|       |   |-- PdfViewerDialog.jsx    visor PDF con resaltado
+|       |   `-- ui/                    componentes shadcn/ui:
+|       |       badge.jsx  button.jsx  card.jsx   dialog.jsx  input.jsx
+|       |       label.jsx  progress.jsx  select.jsx  separator.jsx
+|       |       sonner.jsx  table.jsx
+|       `-- lib/
+|           |-- pdfHighlights.js   busqueda y resaltado de palabras
+|           `-- utils.js           helper cn()
+|-- funcionamiento.txt             (este documento)
+`-- funcionamiento_v1_anterior.txt (version previa, sin el filtro desplegable)
+
+
+--------------------------------------------------------------------------------
+  5. CONFIGURACION (backend/.env)
+--------------------------------------------------------------------------------
+
+Leido por pydantic-settings desde backend/app/config.py.
+
+  Proyecto
+    PROJECT_NAME            nombre de la app en FastAPI
+    VERSION                 version devuelta por /api/health
+
+  Base de datos
+    DB_HOST, DB_PORT        por defecto 127.0.0.1 / 3306
+    DB_USER, DB_PASSWORD    credenciales
+    DB_NAME                 por defecto pdf_classifier
+    (se compone en config.py:36 -> mysql+pymysql://user:pass@host:port/db?charset=utf8mb4)
+
+  Almacenamiento
+    UPLOADS_DIR             por defecto "uploads" (relativo a backend/)
+                            resuelto en config.py:44
+
+  CORS
+    CORS_ORIGINS            lista JSON; por defecto
+                            ["http://localhost:5173","http://127.0.0.1:5173"]
+
+  JWT
+    JWT_SECRET              clave de firma HS256
+    JWT_ALGORITHM           por defecto HS256
+    JWT_EXPIRE_MINUTES      por defecto 1440 (24 horas)
+
+  IA
+    AI_PROVIDER             "disabled" | "opencode" | "openai_compatible"
+    AI_BASE_URL             p.ej. https://opencode.ai/zen/v1
+    AI_MODEL                p.ej. big-pickle
+    AI_API_KEY              token Bearer (opcional)
+    AI_TIMEOUT_SECONDS      por defecto 30
+    AI_MAX_INPUT_CHARS      por defecto 6000 (recorte del texto enviado)
+    AI_FALLBACK_TO_KEYWORDS por defecto true
+
+
+--------------------------------------------------------------------------------
+  6. PUESTA EN MARCHA
+--------------------------------------------------------------------------------
+
+Terminal 1 - Backend
+    cd backend
+    .\venv\Scripts\activate
+    uvicorn app.main:app --reload --port 8000
+  (al arrancar: crea tablas, ejecuta migraciones, siembra roles, crea uploads/)
+
+  Verificacion:      http://127.0.0.1:8000/api/health
+  Documentacion API: http://127.0.0.1:8000/docs
+
+Terminal 2 - Frontend
+    cd frontend
+    npm install
+    npm run dev          (Vite, puerto 5173 por defecto)
+  Acceso: http://localhost:5173
+
+Otros comandos
+    npm run build        genera frontend/dist/
+    npm run preview      sirve dist/
+    npm run lint         oxlint
+
+Nota: si el navegador no refleja un cambio reciente, casi siempre es la pestana
+con el modulo antiguo en memoria (se corta el websocket de HMR de Vite al
+suspender el equipo). Se resuelve cerrando la pestana y reabriendo con
+Ctrl+Shift+R, o reiniciando el servidor de desarrollo.
+
+
+--------------------------------------------------------------------------------
+  7. COMO SE CONECTAN FRONTEND Y BACKEND
+--------------------------------------------------------------------------------
+
+7.1 EL MECANISMO: EL PROXY DE VITE
+--------------------------------------------------------------------------------
+El frontend NO conoce la direccion del backend. Todas sus llamadas usan rutas
+relativas que empiezan por /api:
+
+    fetch('/api/auth/' + modo, ...)                    App.jsx:191
+    fetch('/api/documents/upload', ...)                App.jsx:541
+    fetch(`/api/batches/${id}`, ...)                   App.jsx:572
+    fetch(`/api/documents/${id}/archivo`, ...)         PdfViewerDialog.jsx:149
+
+El servidor de desarrollo de Vite intercepta esas rutas y las reenvia al backend.
+La unica linea que define la conexion esta en:
+
+    frontend/vite.config.js:18
+        server: {
+          proxy: {
+            '/api': 'http://127.0.0.1:8000',     <-- AQUI SE CONECTAN
+          },
+        }
+
+Por eso, en desarrollo, el navegador ve el backend como "su propio origen"
+(mismo host y puerto 5173) y nunca hay problemas de CORS.
+
+7.2 AUTENTICACION
+--------------------------------------------------------------------------------
+  1. El usuario se registra o inicia sesion (endpoint publico). Ambas acciones
+     comparten el mismo manejador, que elige la ruta segun el modo del formulario
+     (App.jsx:191).
+  2. El backend responde con un access_token JWT (HS256) y los datos del usuario.
+  3. El frontend guarda ambos en localStorage:
+         pdf_classifier_token   -> App.jsx:31
+         pdf_classifier_user    -> App.jsx:32
+  4. Cada peticion posterior lleva la cabecera:
+         Authorization: Bearer <token>
+     El token se relee en cada llamada con localStorage.getItem(TOKEN_KEY)
+     (App.jsx:333, 351, 367, 413, 450, 545, 574, 599, 629).
+  5. Si cualquier respuesta devuelve 401, el frontend hace logout automatico
+     y vuelve a la pantalla de login (App.jsx:335, 353, 369, 415, 452, 547,
+     576, 601, 631).
+
+  El token contiene sub (id de usuario), username, iat y exp. El backend lo
+  verifica y carga el usuario desde la base en cada peticion
+  (security.py:42 get_current_user). No hay sesiones en servidor ni cookies:
+  es autenticacion stateless.
+
+7.3 ROLES
+--------------------------------------------------------------------------------
+  admin  acceso total, incluyendo /api/admin/* y /api/documents/resumen
+  user   sube, consulta y revisa sus propios documentos
+
+  El primer usuario registrado recibe el rol "admin" automaticamente
+  (auth.py:23-24). Si el sistema se queda sin administradores, el bootstrap de
+  arranque promueve al usuario mas antiguo (bootstrap.py:27-42).
+  La proteccion se aplica en el servidor: require_roles(["admin"]) en
+  security.py:67, usado como dependencia de router en admin.py:10-14.
+
+7.4 AISLAMIENTO ENTRE USUARIOS
+--------------------------------------------------------------------------------
+  Cada lote y cada documento tiene user_id. Todas las consultas filtran por
+  user_id del usuario autenticado:
+     batches.py:19-27   _get_batch_del_usuario
+     documents.py:62-70 _get_document_del_usuario
+  Un usuario no puede leer, modificar ni borrar documentos de otro: la consulta
+  simplemente no los encuentra y devuelve 404.
+
+7.5 CORS
+--------------------------------------------------------------------------------
+  Configurado en main.py:29-35 con la lista settings.cors_origins. En desarrollo
+  es configuracion inerte porque el proxy hace que todo sea same-origin. Solo
+  importa si se sirve el frontend desde otro origen/puerto que el 5173.
+  Advertencia: si Vite sube al puerto 5174 porque el 5173 esta ocupado, hay que
+  anadir ese origen o arrancar con --strictPort.
+
+7.6 NOTA CRITICA PARA PRODUCCION
+--------------------------------------------------------------------------------
+  El build de produccion (frontend/dist/) NO contiene ninguna URL del backend:
+  sigue usando rutas /api relativas. Servido como estatico, /api/* devolvera 404
+  salvo que se ponga un reverse proxy delante (nginx, Caddy) que reescriba
+
+      location /api { proxy_pass http://127.0.0.1:8000; }
+
+  Alternativa: en ese momento conviene sustituir el proxy de Vite por una
+  variable de entorno tipo VITE_API_URL y usarla en las llamadas.
+
+
+--------------------------------------------------------------------------------
+  8. MODELO DE DATOS
+--------------------------------------------------------------------------------
+
+users                      roles                     user_roles
+  id       INT AI (PK)       id  INT AI (PK)            user_id INT FK -> users
+  username VARCHAR(100) U   nombre VARCHAR(50) U       role_id INT FK -> roles
+  password_hash VARCHAR255                                 PK (user_id, role_id)
+  created_at DATETIME
+
+batches                                                     documents
+  id           INT AI (PK)                                   id       INT AI (PK)
+  user_id      INT FK -> users (CASCADE)                     batch_id INT FK -> batches
+  nombre_lote  VARCHAR(255)                                  user_id  INT FK -> users
+  fecha_creacion DATETIME                                    nombre_archivo VARCHAR(255)
+  (1 lote = N documentos)                                    ruta_fisica  VARCHAR(512)
+                                                            hash_archivo  VARCHAR(64) UQ
+                                                            clasificacion VARCHAR(100)
+                                                            confianza    FLOAT
+                                                            motivo       VARCHAR(500)
+                                                            palabras     TEXT (JSON)
+                                                            requiere_revision BOOLEAN
+                                                            estado VARCHAR(20)
+
+  Estados posibles (models/document.py:14-19):
+      PENDIENTE   requiere revision, aun no validado
+      APROBADO    validado (FINAL)
+      RECHAZADO   descartado (FINAL)
+
+  APROBADO y RECHAZADO son estados TERMINALES (ESTADOS_FINALES,
+  es_estado_final, models/document.py:26-28). La unica transicion valida es
+  PENDIENTE -> APROBADO o PENDIENTE -> RECHAZADO. Una vez en un estado final
+  no se puede volver a PENDIENTE ni marcar/desmarcar la revision.
+
+  El estado NO es un campo independiente: se deriva de requiere_revision
+  (estado_desde_revision, models/document.py:22). Poner "Revision 0" convierte el
+  documento en APROBADO y viceversa; ambos endpoints PATCH mantienen la
+  coherencia de los dos campos (models/document.py:22-27).
+
+  Relaciones: Batch.documents usa cascade="all, delete-orphan", por lo que al
+  borrar un lote se borran sus documentos en cascada (models/batch.py:31).
+
+  Indice unico uq_documents_hash_archivo sobre hash_archivo: impide subir dos
+  veces el mismo PDF en todo el sistema.
+
+
+--------------------------------------------------------------------------------
+  9. FLUJO COMPLETO: DE LA CARGA A LA CLASIFICACION
+--------------------------------------------------------------------------------
+
+9.1 FASE 0 - ACCESO
+--------------------------------------------------------------------------------
+  El usuario abre la app. App.jsx lee el token de localStorage (App.jsx:292).
+    - Sin token  -> se renderiza AuthScreen (App.jsx:181).
+    - Con token -> useEffect dispara loadBatches() y loadMe() (App.jsx:478-483).
+                  Si es admin, ademas loadResumen() y loadAdminData()
+                  (App.jsx:485-490).
+
+9.2 FASE 1 - SELECCION DE ARCHIVOS (solo cliente)
+--------------------------------------------------------------------------------
+  Card "Clasificar lote" (App.jsx:838). Un input file oculto con
+  accept="application/pdf" y multiple (App.jsx:847) alimenta el estado
+  selectedFiles. El usuario teclea opcionalmente el nombre del lote.
+  El cliente limita a 5 archivos y avisa si se superan (App.jsx:33, 647, 877).
+
+9.3 FASE 2 - ENVIO (App.jsx:533-567)
+--------------------------------------------------------------------------------
+  handleUpload construye un FormData:
+     form.append('files', file)          por cada PDF      App.jsx:536
+     form.append('nombre_lote', ...)     opcional         App.jsx:537
+  y lo envia:
+     POST /api/documents/upload
+     Authorization: Bearer <token>
+     body: FormData (sin Content-Type explicito: el navegador pone el
+            boundary multipart)
+
+  Nota: la subida es SINCRONA. El boton queda en estado "uploading" y la UI
+  permanece bloqueada hasta que el servidor termina de clasificar el lote. No
+  hay trabajo en segundo plano ni polling.
+
+9.4 FASE 3 - VALIDACION EN EL BACKEND (routers/documents.py:73-184)
+--------------------------------------------------------------------------------
+  El router tiene dependencia de autenticacion a nivel de router
+  (documents.py:41-45), asi que sin Bearer valido responde 401 antes de ejecutar
+  nada.
+
+  a) Valida que haya al menos un archivo y no mas de MAX_FILES = 5
+     (documents.py:47, 80-86). Si no, HTTP 400.
+
+  b) Crea el registro Batch y hace flush para obtener el id
+     (documents.py:92-94). Si no viene nombre de lote, genera
+     "Lote dd/mm/aaaa HH:MM" (documents.py:88-90).
+
+  c) Crea la carpeta uploads/<batch_id>/ (documents.py:96-97).
+
+  d) Por cada archivo, en un bucle (documents.py:103):
+       - Comprueba la extension .pdf (documents.py:104-108)  -> 400 si no lo es
+       - Lee los bytes completos del archivo (documents.py:110)
+       - Calcula SHA-256 del contenido (documents.py:111)
+       - Detecta duplicados DENTRO del mismo lote (documents.py:113-117) -> 400
+       - Detecta duplicados EN EL SISTEMA consultando documents.hash_archivo
+         (documents.py:118-122) -> 400
+       - Extrae el texto de la primera pagina (documents.py:125) -- ver 9.5
+       - Clasifica el texto (documents.py:137)               -- ver 9.6
+       - Guarda el archivo en disco con nombre
+         "<uuid4 hexadecimal>_<nombre original>" (documents.py:138-142)
+         para evitar colisiones y path traversal (se usa os.path.basename)
+       - Inserta la fila en documents con todos los resultados
+         (documents.py:144-158)
+       - Acumula el resultado para la respuesta
+
+  e) Si algo falla, hace rollback y BORRA los archivos ya escritos del disco
+     para no dejar basura (documents.py:172-182, _descartar_archivos en :50).
+
+  f) db.commit() y responde 201 Created con la estructura UploadResponse
+     (documents.py:184):
+        { batch_id, nombre_lote, documents: [ {nombre_archivo, clasificacion,
+          confianza, motivo, palabras, requiere_revision, estado}, ... ] }
+
+9.5 FASE 4 - EXTRACCION DE TEXTO (services/pdf_text.py)
+--------------------------------------------------------------------------------
+  extraer_texto_primera_pagina(raw, nombre) -- pdf_text.py:70
+    1. Abre el PDF con PyPDF2 desde memoria (BytesIO) -- pdf_text.py:20-27
+       Si no se puede leer -> PdfNoClasificable("ilegible")
+    2. Si el documento esta cifrado, intenta abrirlo con contrasena vacia
+       (pdf_text.py:30-47). Si usa AES no soportado o tiene contrasena ->
+       PdfNoClasificable("cifrado_no_soportado" / "protegido")
+    3. Extrae SOLO la pagina 1: reader.pages[0].extract_text() -- pdf_text.py:57
+    4. Si el texto viene vacio -> PdfNoClasificable("sin_texto"), con el mensaje
+       de que probablemente es un escaneo sin OCR y por tanto no clasificable
+       (pdf_text.py:75-80)
+
+  Cualquiera de estos errores se traduce a HTTP 400 con un mensaje legible para
+  el usuario (documents.py:126-135).
+
+  Solo se analiza la primera pagina por decision de diseno: es la que contiene
+  emisor, numero, fecha, objeto del contrato o el encabezado del formulario.
+
+9.6 FASE 5 - CLASIFICACION (services/classifier.py)
+--------------------------------------------------------------------------------
+  classify_document(text) -- classifier.py:114. Es una cadena de dos motores con
+  degradacion elegante:
+
+  MOTOR 1 - MODELO DE IA (preferido)
+    classify_with_ai(text) -> llm_client.py:155
+      1. _request_completion (llm_client.py:96) decide si llamar:
+           - si AI_PROVIDER esta vacio, "disabled" o "none" -> no llama
+           - si el proveedor no esta soportado -> no llama
+           - recorta el texto a AI_MAX_INPUT_CHARS caracteres
+      2. POST {AI_BASE_URL}/chat/completions con:
+             model, temperature 0, max_tokens 300,
+             response_format {"type":"json_object"},
+             system = SYSTEM_PROMPT, user = texto entre <documento></documento>
+      3. Cabecera Authorization: Bearer {AI_API_KEY} si hay clave
+      4. Errores de red, timeout o JSON invalido -> devuelve None (nunca rompe
+         la subida)
+
+    El SYSTEM_PROMPT (llm_client.py:12-26) define:
+      - las tres categorias validas y como se reconocen
+      - que se analice unicamente la primera pagina
+      - que el contenido del PDF es NO CONFIABLE y se ignoren los intentos de
+        prompt injection que aparezcan dentro del documento
+      - reglas: clasificar por funcion principal y no por palabra aislada; una
+        factura citada dentro de un contrato no convierte al documento en
+        factura; evidencia debil -> requiere_revision=true; motivo breve sin
+        datos personales, fiscales ni bancarios; nunca inventar una cuarta
+        categoria; devolver solo JSON valido
+      - confianza numerica entre 0 y 1 y clasificacion exactamente
+        "FACTURA", "CONTRATO" o "FORMULARIO 110"
+
+    _parse_classification (llm_client.py:48) valida la respuesta de forma
+    estricta: debe ser JSON, la categoria debe mapear a una valida, la confianza
+    debe ser un float finito en [0,1], requiere_revision debe ser booleano y el
+    motivo una cadena no vacia (recortada a 500 caracteres). Cualquier
+    incumplimiento -> None -> se activa el fallback.
+
+    Detalle importante (llm_client.py:162-168): el modelo no dice que palabras
+    vio, asi que despues de clasificar se RECALCULAN las coincidencias sobre el
+    texto original con la lista de keywords de la categoria elegida. Esa es
+    exactamente la lista que el visor luego resaltara.
+
+  MOTOR 2 - PALABRAS CLAVE (respaldo) -- classifier.py:62
+    Se usa si la IA no esta configurada, falla o devuelve algo invalido, siempre
+    que AI_FALLBACK_TO_KEYWORDS sea true.
+
+      CATEGORY_KEYWORDS (classifier.py:4-16):
+        FACTURA         "factura", "n° de factura", "facturar a", "importe"
+        CONTRATO        "CONTRATO", "CÓDIGO", "OBJETO DEL CONTRATO",
+                        "PARTES CONTRATANTES"
+        FORMULARIO 110  "Funcionario Dependiente", "Anexo al Form 610",
+                        "Anexo al Form 702", "Anexo al Form 510"
+
+      Algoritmo:
+        1. _normalize: NFKC + minusculas + colapsa espacios (classifier.py:30)
+        2. Cuenta keywords encontradas por categoria
+        3. Sin ninguna coincidencia -> "OTRO", confianza 0.0,
+           requiere_revision=True
+        4. Gana la categoria con mas coincidencias
+        5. confianza = min(coincidencias / 5, 1.0)   (5 palabras = 100%)
+        6. requiere_revision = True si hay empate entre categorias
+           o si confianza < 0.6 (REVIEW_CONFIDENCE_THRESHOLD, classifier.py:18)
+        7. _build_reason redacta el motivo en lenguaje natural
+           (classifier.py:39-59)
+
+  Si la IA esta deshabilitada Y el fallback esta apagado, el documento se
+  clasifica como "OTRO" con confianza 0 y revision pendiente
+  (classifier.py:125-131).
+
+9.7 FASE 6 - PERSISTENCIA DEL RESULTADO
+--------------------------------------------------------------------------------
+  Se inserta un Document por archivo (documents.py:144-158) con:
+      clasificacion     categoria elegida
+      confianza         float 0..1
+      motivo            explicacion legible
+      palabras          JSON con las keywords halladas (dump_palabras)
+      requiere_revision booleano
+      estado            derivado: PENDIENTE si requiere_revision,
+                        APROBADO si no (estado_desde_revision,
+                        models/document.py:20)
+      ruta_fisica       uploads/<batch_id>/<uuid>_<nombre original>
+      hash_archivo      SHA-256
+  Se hace un unico commit para todo el lote (documents.py:171).
+
+9.8 FASE 7 - RESPIESTA Y ACTUALIZACION DE LA UI
+--------------------------------------------------------------------------------
+  El frontend recibe el JSON, muestra un toast con el nombre del lote y el
+  numero de documentos clasificados (App.jsx:555-556), limpia el formulario y
+  recarga los datos:
+      await loadBatches()                 App.jsx:561
+      if (isAdmin) await loadResumen()    App.jsx:562
+  Si la respuesta es 401 se hace logout (App.jsx:547).
+
+9.9 FASE 8 - REVISION HUMANA Y FILTRADO
+--------------------------------------------------------------------------------
+  El usuario ve la tabla de documentos con: nombre, categoria, motivo,
+  confianza en porcentaje, estado, boton de revision y acciones
+  (App.jsx:966-1045). Una tabla por lote, agrupada bajo la cabecera del lote
+  con su fecha y numero de documentos (App.jsx:949-964).
+
+  FILTRO POR ESTADO
+  Es un desplegable (Select) en la cabecera de la tarjeta, a la izquierda
+  (App.jsx:907-922). Las opciones se declaran en FILTROS_ESTADO
+  (App.jsx:77-82):
+
+      TODOS      -> no filtra
+      PENDIENTE  -> "Solo pendientes de revision"
+      APROBADO   -> "Solo aprobados"
+      RECHAZADO  -> "Solo rechazados"
+
+  El estado vive en filtroEstado (App.jsx:315) y llega al desplegable por
+  <Select value={filtroEstado} onValueChange={setFiltroEstado}> (App.jsx:911).
+
+  El filtrado se hace ENTERO EN EL CLIENTE, sobre los lotes ya descargados:
+
+      lotesVisibles (App.jsx:492-500)
+        - si el filtro es TODOS, devuelve los lotes tal cual
+        - si no, mapea cada lote dejando solo los documentos cuyo estado
+          coincide, y descarta los lotes que quedan vacios
+
+  Es decir, GET /api/batches no recibe parametros y sigue devolviendo todos los
+  lotes del usuario; el recorte es posterior y en memoria. Al filtrar se
+  muestra ademas un contador "Mostrando N documento(s)" (App.jsx:923-927), cuyo
+  valor calcula documentosVisibles (App.jsx:502-505).
+
+  Si el filtro deja la lista vacia, el mensaje cambia segun el estado elegido
+  (MENSAJES_VACIOS_FILTRO, App.jsx:84-88; usado en App.jsx:938-943) para no
+  mostrar siempre el texto de "pendientes de revision".
+
+  ACCIONES SOBRE UN DOCUMENTO
+    Boton de revision -> PATCH /api/documents/{id}/revision  (App.jsx:403-417)
+    Boton de rechazo  -> PATCH /api/documents/{id}/estado    (App.jsx:440-457)
+    Boton de ver      -> abre PdfViewerDialog con el documento
+    Borrar lote       -> DELETE /api/batches/{id}             (App.jsx:570-582)
+
+  Tras cualquier cambio se parchea el estado local y se refresca el resumen si
+  el usuario es admin.
+
+  Ojo con el oyente: ambos botones de la tabla se deshabilitan mientras la misma
+  operacion esta en curso (App.jsx:1002, 1034), para evitar respuestas fuera de
+  orden. Ademas, el boton de revision queda deshabilitado cuando el estado no es
+  PENDIENTE (App.jsx:1002-1004, PdfViewerDialog.jsx:318-323), porque
+  APROBADO y RECHAZADO son finales.
+
+
+--------------------------------------------------------------------------------
+  10. EL VISOR DE PDF CON RESALTADO (frontend/src/components/PdfViewerDialog.jsx)
+--------------------------------------------------------------------------------
+
+  El visor se carga bajo demanda con React.lazy + Suspense porque pdf.js pesa
+  cerca de 1 MB (App.jsx:36, 1054-1066).
+
+  Al abrir un documento se hacen DOS peticiones en paralelo (lineas 148-155):
+      GET /api/documents/{id}/archivo   -> Blob con el PDF
+      GET /api/documents/{id}/analisis  -> { categoria, palabras[] }
+  Si cualquiera devuelve 401 se propaga onUnauthorized y se cierra la sesion.
+
+  El blob se convierte en ArrayBuffer y se entrega a pdf.js, que pinta la pagina
+  1 en un canvas ajustado al ancho disponible y con devicePixelRatio (lineas
+  67-90). Si el PDF tiene mas paginas se avisa de que solo se analiza la primera
+  (lineas 276-280).
+
+  El resaltado de palabras se resuelve EN EL CLIENTE de forma intencionada
+  (comentario en documents.py:255-257): PyPDF2 y pdf.js extraen el texto con
+  espacios y saltos distintos, asi que las posiciones que devuelve el servidor
+  no encajarian con lo que se dibuja. Por eso /analisis devuelve la LISTA de
+  palabras y el navegador las localiza sobre su propia capa de texto:
+
+      src/lib/pdfHighlights.js
+        concatenarItems   une los items de la pagina guardando el indice de inicio
+        compactar         NFKC + minusculas + elimina espacios, con mapa al
+                          indice original (para el caso de que un caracter se
+                          normalice a varios, p.ej. ligaduras)
+        buscarPalabras    busca cada palabra y devuelve sus rangos
+        resaltar          convierte los rangos en rectangulos de canvas
+
+  Cada coincidencia se pinta como un <span> absoluto sobre el canvas, con el
+  color de la categoria y mixBlendMode "multiply" (lineas 261-275). Las palabras
+  que el modelo no vio en el PDF se muestran tachadas en la lista "Textos
+  reconocidos" (lineas 230-243).
+
+  El dialogo tambien ofrece Descargar (object URL del blob), Rechazar y
+  Marcar como revisado (lineas 289-323).
+
+
+--------------------------------------------------------------------------------
+  11. CATALOGO DE ENDPOINTS
+--------------------------------------------------------------------------------
+
+Prefijo | Metodo | Ruta                                  | Auth        | Implementacion            | Uso desde el frontend
+--------+---------|---------------------------------------|-------------|---------------------------|-----------------------
+/api    | GET     | /health                              | ninguna     | main.py:44                | no se usa
+/api    | POST    | /auth/register                       | ninguna     | routers/auth.py:13        | App.jsx:191
+/api    | POST    | /auth/login                          | ninguna     | routers/auth.py:33        | App.jsx:191
+/api    | GET     | /auth/me                             | Bearer      | routers/auth.py:45        | App.jsx:366
+/api    | GET     | /batches                             | Bearer      | routers/batches.py:30     | App.jsx:332
+/api    | GET     | /batches/{batch_id}                  | Bearer      | routers/batches.py:40     | no se usa
+/api    | DELETE | /batches/{batch_id}                  | Bearer      | routers/batches.py:49     | App.jsx:572
+/api    | POST    | /documents/upload                    | Bearer      | routers/documents.py:73   | App.jsx:541
+/api    | GET     | /documents                           | Bearer      | routers/documents.py:187  | no se usa
+/api    | GET     | /documents/resumen                   | Bearer+admin| routers/documents.py:192  | App.jsx:350
+/api    | DELETE | /documents/{id}                      | Bearer      | routers/documents.py:226  | no se usa
+/api    | GET     | /documents/{id}/analisis             | Bearer      | routers/documents.py:249  | PdfViewerDialog.jsx:152
+/api    | GET     | /documents/{id}/archivo              | Bearer      | routers/documents.py:266  | PdfViewerDialog.jsx:149
+/api    | PATCH   | /documents/{id}/revision             | Bearer      | routers/documents.py:290  | App.jsx:407
+/api    | PATCH   | /documents/{id}/estado               | Bearer      | routers/documents.py:305  | App.jsx:444
+/api    | GET     | /admin/users                         | Bearer+admin| routers/admin.py:38        | App.jsx:386
+/api    | GET     | /admin/roles                         | Bearer+admin| routers/admin.py:43        | App.jsx:387
+/api    | POST    | /admin/users                         | Bearer+admin| routers/admin.py:48        | App.jsx:619
+/api    | PUT     | /admin/users/{user_id}/roles         | Bearer+admin| routers/admin.py:62        | App.jsx:593
+
+Notas de contrato:
+  - /api/documents y /api/batches/{id} y DELETE /api/documents/{id} existen pero
+    el frontend actual no los invoca.
+  - POST /api/auth/register devuelve el usuario, NO un token. Tras registrarse el
+    frontend cambia al modo login (App.jsx:205-209).
+  - PATCH /estado normaliza a mayusculas (schemas/document.py:78) y rechaza
+    valores fuera del catalogo con HTTP 400. Ademas impide poner RECHAZADO en un
+    documento que no tenga requiere_revision = true (documents.py:334-338).
+  - PATCH /estado y PATCH /revision rechazan con HTTP 400 cualquier cambio
+    cuando el documento ya esta en APROBADO o RECHAZADO (documents.py:299-306 y
+    322-332). Reaplicar el MISMO estado final es idempotente y devuelve 200.
+  - PATCH /revision y PATCH /estado mantienen coherentes los dos campos:
+    cambiar la revision recalcula el estado y viceversa
+    (estado_desde_revision / requiere_revision_desde_estado,
+    models/document.py:22-27).
+  - Ningun endpoint de listado acepta parametros de paginacion, busqueda ni
+    filtro. El unico filtrado de la lista (el de estado) es del cliente.
+
+
+--------------------------------------------------------------------------------
+  12. SEGURIDAD
+--------------------------------------------------------------------------------
+
+  - Contrasenas: hash bcrypt con salt por usuario (security.py:22-27). Nunca se
+    almacenan en claro ni se devuelven en la API.
+  - Tokens: JWT HS256 firmados con JWT_SECRET, con expiracion configurable
+    (security.py:30-39 create_access_token). Secretos en backend/.env, nunca en
+    el codigo.
+  - Autorizacion: dependencias de FastAPI (security.py:42, 67). El router admin
+    exige el rol admin a nivel de router (admin.py:13), de modo que ningun
+    endpoint suyo queda desprotegido por olvido.
+  - Aislamiento por usuario: filtro user_id en cada acceso a lotes y documentos.
+  - Validacion de entrada: Pydantic valida cuerpos (longitudes minimas y maximas
+    de usuario y contrasena, catalogo de estados, roles existentes).
+  - Integridad referencial con CASCADE: al borrar un usuario se borran sus lotes
+    y documentos en la base; los archivos en disco se limpian al borrar el lote
+    (batches.py:60) o el documento (documents.py:237-238).
+  - Defense in depth frente a prompt injection: el texto del PDF se delimita
+    entre etiquetas <documento> y el system prompt declara ese contenido no
+    confiable (llm_client.py:17, 30-32). Aun asi, la IA no decide el estado final
+    del documento: solo propone la categoria.
+  - El nombre de archivo se sanea con os.path.basename antes de construir la ruta
+    (documents.py:138), evitando path traversal.
+  - AVISO: backend/.env contiene AI_API_KEY y JWT_SECRET con valores reales o de
+    ejemplo. Ese archivo no debe subirse a un repositorio ni compartirse.
+  - Limitacion conocida: el frontend guarda el JWT en localStorage, accesible
+    desde JavaScript. Es comodo pero queda expuesto ante un XSS.
+
+
+--------------------------------------------------------------------------------
+  13. MIGRACIONES AUTOMATICAS AL ARRANCAR
+--------------------------------------------------------------------------------
+
+  No hay Alembic. El lifespan de FastAPI (main.py:15-22) ejecuta en cada inicio:
+
+    1. Base.metadata.create_all(bind=engine)  -> crea las tablas que falten
+    2. ensure_schema()                        -> database.py:534
+         a. _migrate_ids_a_entero()            -> convierte users.id y roles.id
+              de UUID (VARCHAR 36) a INT AUTO_INCREMENT, volcando antes un
+              respaldo en respaldo_usuarios_uuid.sql (database.py:217)
+         b. _migrate_batches_id_a_entero()    -> lo mismo para batches.id y
+              documents.batch_id, incluyendo RENOMBRAR las carpetas uploads/<uuid>/
+              a uploads/<id>/ y actualizar documents.ruta_fisica
+              (database.py:488, respaldo en respaldo_lotes_uuid.sql)
+         c. _ensure_columns()                 -> ALTER TABLE ADD COLUMN de las
+              columnas que falten (confianza, motivo, requiere_revision,
+              user_id, hash_archivo, estado, palabras) + indices + FKs
+         d. _normalize_categories()            -> pasa clasificacion a mayusculas
+         e. _backfill_hash_archivo()           -> calcula el SHA-256 de los PDFs
+              ya almacenados para deduplicar tambien el historico
+         f. _ensure_hash_unique_index()        -> crea el indice unico si no hay
+              duplicados
+         g. _backfill_estado()                 -> pone en PENDIENTE los documentos
+              con requiere_revision = 1 que estaban en APROBADO
+    3. seed_roles()                           -> inserta los roles admin y user,
+              asigna "user" a los usuarios sin rol y promueve a admin al usuario
+              mas antiguo si el sistema se quedo sin administradores
+    4. mkdir uploads/                         -> asegura el directorio
+
+  Consecuencia practica: la base de datos se mantiene sincronizada con el codigo
+  sin intervencion manual, pero las migraciones son irreversibles en cuanto a
+  estructura de claves.
+
+
+--------------------------------------------------------------------------------
+  14. DIAGRAMA DE SECUENCIA DE LA CARGA
+--------------------------------------------------------------------------------
+
+  Usuario        React (App.jsx)      Vite proxy        FastAPI            IA            MySQL
+     |                 |                   |                |                |              |
+     | elige PDFs      |                   |                |                |              |
+     |---------------->|                   |                |                |              |
+     | "Clasificar"    |                   |                |                |              |
+     |---------------->| POST /api/documents/upload (FormData)               |              |
+     |                 |------------------>|--------------->|                |              |
+     |                 |                   |                | verificar JWT  |              |
+     |                 |                   |                |  |             |              |
+     |                 |                   |                | INSERT batch  |              |
+     |                 |                   |                |---------------->|              |
+     |                 |                   |                |                |              |
+     |                 |                   |                | (por cada PDF) |              |
+     |                 |                   |                |  validar .pdf  |              |
+     |                 |                   |                |  sha256 + dedup|              |
+     |                 |                   |                |---------------->|              |
+     |                 |                   |                |                |              |
+     |                 |                   |                | PyPDF2: texto |              |
+     |                 |                   |                | de la pag. 1  |              |
+     |                 |                   |                |                |              |
+     |                 |                   |                | POST /chat/completions         |
+     |                 |                   |                |--------------->|              |
+     |                 |                   |                |  JSON {clasif,|              |
+     |                 |                   |                |  confianza,   |              |
+     |                 |                   |                |  revision,    |              |
+     |                 |                   |                |  motivo}      |              |
+     |                 |                   |                |<---------------|              |
+     |                 |                   |                | recalcular    |              |
+     |                 |                   |                | keywords      |              |
+     |                 |                   |                |                |              |
+     |                 |                   |                | escribir PDF  |              |
+     |                 |                   |                | en uploads/   |              |
+     |                 |                   |                |                |              |
+     |                 |                   |                | INSERT document              |
+     |                 |                   |                |----------------------------->|
+     |                 |                   |                |                |              |
+     |                 |                   |                | COMMIT                        |
+     |                 |                   |                |-------------------------------->|
+     |                 |                   |                |                |              |
+     |<-- 201 {batch_id, nombre_lote, documents[]} ----------|              |
+     |                 |------------------>|                |                |              |
+     | toast + recarga |                   |                |                |              |
+     |<----------------|                   |                |                |              |
+
+
+--------------------------------------------------------------------------------
+  15. LIMITACIONES Y PUNTOS DE MEJORA
+--------------------------------------------------------------------------------
+
+   1. Solo se analiza la PRIMERA PAGINA. Un PDF cuya informacion clave este en
+      paginas posteriores se clasificara como OTRO.
+   2. Sin OCR: los escaneos sin capa de texto se rechazan con HTTP 400.
+   3. La subida es sincrona y bloqueante. Con 5 PDFs y una llamada a la IA por
+      archivo el usuario puede esperar varios segundos; un unload por trabajo en
+      segundo plano eliminaria esa espera.
+   4. Sin capa de cliente HTTP. Hay ~14 llamadas fetch() repetidas por el
+      componente. Extraer un src/lib/api.js con un wrapper que adjunte el token y
+      centralice el manejo del 401 evitaria duplicacion.
+   5. La URL del backend esta fija en vite.config.js. No se puede cambiar por
+      entorno sin recompilar.
+   6. El build de produccion necesita un reverse proxy externo (ver 7.6).
+   7. Sin tests automaticos. Hay dos scripts de integracion (test_upload.py,
+      test_estados.py) que hay que ejecutar a mano contra un servidor vivo.
+   8. Sin limite de tamaño de archivo ni de uso de memoria: el backend lee el
+      PDF entero en memoria (documents.py:110).
+   9. Sin CSP, sin rate limiting y sin registro de auditoria de acciones.
+  10. Los secretos conviven en .env junto al codigo. Falta .gitignore en la raiz
+      del repositorio (backend/.env deberia estar excluido de forma explicita).
+  11. Sin busqueda por texto ni paginacion en la lista. El filtro por estado es
+      la unica depuracion disponible y se resuelve en el cliente, de modo que
+      /api/batches sigue transfiriendo todos los lotes del usuario en cada
+      carga. Anadirlo de verdad exigiria parametros en el endpoint (q, estado,
+      pagina, limite) y el correspondiente filtrado en SQL.
+  12. El filtro de estado no recuerda su seleccion: al recargar la pagina vuelve
+      a "Todos". Persistirlo en la URL o en localStorage lo haria compartible.
+
+
+================================================================================
+ FIN DEL DOCUMENTO
+================================================================================

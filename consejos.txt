@@ -1,0 +1,85 @@
+# Propuesta de Arquitectura: Sistema de Clasificación de Documentos PDF con IA
+
+## 1. Stack Tecnológico Recomendado
+
+Para un sistema web orientado a escritorio, robusto y moderno, recomiendo el siguiente stack:
+
+### Backend: Python (FastAPI)
+**¿Por qué?**
+- **Integración con IA:** Python es el lenguaje estándar para IA. La integración con Ollama es trivial mediante su API REST o librerías oficiales.
+- **Manejo de PDFs:** Librerías potentes como `PyMuPDF` o `pdfplumber` para extraer texto de los archivos antes de enviarlos a Gemma.
+- **Velocidad:** FastAPI es extremadamente rápido, asíncrono y genera documentación automática (Swagger).
+
+### Frontend: React.js + Tailwind CSS + Shadcn UI
+**¿Por qué?**
+- **Experiencia de Usuario:** React permite crear una interfaz fluida y reactiva (Single Page Application).
+- **Estética Profesional:** Tailwind y Shadcn UI permiten crear un look "Enterprise/Desktop" limpio y moderno rápidamente.
+- **Manejo de Archivos:** Facilita la implementación de drag-and-drop para la subida de lotes.
+
+### Base de Datos: MySQL
+- **Relacional:** Ideal para manejar la estructura de usuarios, lotes y rutas de archivos.
+
+### IA: Ollama (Gemma 4:31b-cloud)
+- **Procesamiento:** Se consumirá vía API local/cloud de Ollama para la clasificación.
+
+---
+
+## 2. Estructura de Proyecto Sugerida
+
+```text
+pdf-classifier-system/
+├── backend/
+│   ├── app/
+│   │   ├── api/                # Endpoints (routes)
+│   │   │   ├── auth.py         # Login y validación
+│   │   │   ├── documents.py    # Subida y gestión de lotes
+│   │   │   └── classifier.py   # Lógica de IA y procesamiento
+│   │   ├── core/               # Configuración, seguridad (JWT), DB connection
+│   │   ├── models/             # Modelos de SQLAlchemy (Tablas MySQL)
+│   │   ├── services/           # Lógica de negocio (Ollama client, File service)
+│   │   └── main.py             # Punto de entrada de la aplicación
+│   ├── uploads/                # Directorio local (File Service) o config de S3/Azure
+│   └── requirements.txt
+├── frontend/
+│   ├── src/
+│   │   ├── components/         # Componentes reutilizables (UI, Navbar, etc.)
+│   │   ├── pages/              # Vistas (Login, Upload, Classify)
+│   │   ├── services/           # Llamadas a la API del backend (axios)
+│   │   └── App.js
+│   ├── tailwind.config.js
+│   └── package.json
+└── docker-compose.yml          # Para levantar MySQL, Backend y Frontend fácilmente
+```
+
+---
+
+## 3. Definición de Endpoints (API)
+
+### Módulo de Autenticación
+- `POST /auth/login`: Recibe `usuario` y `password`. Valida contra MySQL y devuelve un Token JWT.
+
+### Módulo de Carga de Archivos (Lotes)
+- `POST /documents/upload`:
+    - **Input:** Multipart form (lista de PDFs max 5, nombre del lote).
+    - **Acción:** Guarda archivos en el file service $\rightarrow$ Inserta registros en MySQL (ruta, nombre, lote_id).
+    - **Output:** Confirmación de subida y ID del lote.
+
+### Módulo de Clasificación (IA)
+- `POST /documents/classify/{lote_id}`:
+    - **Input:** ID del lote.
+    - **Acción:**
+        1. Busca archivos asociados al lote en MySQL.
+        2. Extrae el texto de cada PDF.
+        3. Envía el texto a **Gemma 4** con un prompt específico: *"Clasifica este documento como 'Contrato' o 'Factura' basándote en [parámetros]..."*.
+        4. Actualiza la clasificación en la base de datos.
+    - **Output:** Lista de archivos procesados y su clasificación.
+
+---
+
+## 4. Consejos Adicionales
+
+1. **Prompt Engineering:** Para que Gemma clasifique bien, no envíes todo el PDF si es muy largo. Envía las primeras 2 páginas o busca palabras clave (ej: "RFC", "Total a pagar" $\rightarrow$ Factura; "Cláusulas", "Acuerdo" $\rightarrow$ Contrato).
+2. **Seguridad:** No guardes passwords en texto plano en MySQL; usa `bcrypt` o `argon2`.
+3. **File Service:** Si el sistema crece, no guardes los archivos en el disco del servidor; usa un Object Storage (como MinIO, que es open source y compatible con S3).
+4. **Asincronismo:** La clasificación por IA puede tardar. Usa **Background Tasks** de FastAPI para que el usuario no tenga que esperar con la pantalla congelada mientras la IA procesa los PDFs.
+5. **Validación de Lote:** Implementa una validación en el frontend para que el usuario no pueda intentar subir más de 5 archivos por lote.

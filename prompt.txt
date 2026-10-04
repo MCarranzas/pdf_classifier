@@ -1,0 +1,4 @@
+crear proyecto con la siguiente arquitectura:
+Backend: Python (FastAPI)
+Frontend: React.js + Tailwind CSS + Shadcn UI
+Base de Datos: MySQL. Nombre: pdf_classifier. usuario: root, sin contraseña, puerto: 3306

@@ -1,0 +1,36 @@
+# Secretos y configuracion local
+.env
+.env.*
+!.env.example
+
+# PDFs subidos por los usuarios y muestras de prueba (datos reales, nunca al repo)
+backend/uploads/
+backend/pdf_ejemplos/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Node / build
+node_modules/
+dist/
+dist-ssr
+
+# Testing / coverage
+.coverage
+htmlcov/
+
+# Logs
+logs
+*.log
+
+# Editores / SO
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+Thumbs.db
+*.sw?

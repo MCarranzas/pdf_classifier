@@ -1,0 +1,127 @@
+TECH STACK - pdf_classifier
+============================
+
+Aplicacion web full-stack para clasificar PDFs en tres categorias
+(FACTURA, CONTRATO, FORMULARIO 110). Arquitectura de dos partes:
+backend API en Python + frontend SPA en React.
+
+
+1. BACKEND (backend/)
+------------------------
+
+Lenguaje y framework
+- Python
+- FastAPI              -> framework HTTP / OpenAPI automatico
+- Uvicorn (standard)   -> servidor ASGI
+
+Base de datos
+- MySQL / MariaDB      -> base de datos relacional
+- PyMySQL              -> driver MySQL (charset utf8mb4)
+- SQLAlchemy 2.0       -> ORM + migraciones manuales via ensure_schema()
+
+Modelado y configuracion
+- Pydantic v2          -> validacion de datos
+- pydantic-settings    -> configuracion desde archivo .env
+- pathlib / dataclasses / functools -> libreria estandar
+
+Seguridad
+- PyJWT                -> tokens JWT (HS256)
+- bcrypt               -> hash de contrasenas
+
+Procesamiento de PDF
+- PyPDF2               -> lectura, descifrado y extraccion de texto de la
+                          primera pagina
+- pycryptodome         -> soporte de cifrado
+- cryptography         -> algoritmos criptograficos
+- python-multipart     -> recepcion de archivos multipart (subida de PDFs)
+
+Inteligencia artificial (clasificador, opcional)
+- urllib (stdlib)      -> llamadas HTTP al endpoint /chat/completions
+                          (sin SDK externo)
+- Formato de respuesta: JSON mode, temperature 0, max_tokens 300
+- Proveedores soportados: opencode, openai_compatible
+- Valores por defecto: base_url https://opencode.ai/zen/v1, model big-pickle
+- Fallback: clasificador por palabras clave si la IA falla o esta deshabilitada
+
+
+2. FRONTEND (frontend/)
+------------------------
+
+Framework y build
+- React 19             -> interfaz de usuario
+- React DOM 19
+- Vite 8              -> dev server y bundler
+- @vitejs/plugin-react -> soporte de JSX y Fast Refresh
+- JavaScript + JSX     -> sin TypeScript
+
+Estilos y UI
+- Tailwind CSS 4       -> estilos utilitarios
+- @tailwindcss/vite    -> plugin de Tailwind para Vite
+- tw-animate-css       -> animaciones
+- shadcn/ui            -> componentes construidos sobre Radix
+- Radix UI 1.6         -> primitivas accesibles (dialog, select, table, etc.)
+- class-variance-authority -> variantes de componentes
+- cn                   -> helper para clases condicionales
+- lucide-react         -> iconos
+- sonner               -> notificaciones/toasts
+- next-themes          -> tema claro/oscuro
+- @fontsource-variable/geist -> tipografia
+
+
+3. ESTRUCTURA DE CADA LADO
+---------------------------
+
+backend/app/
+- models/       -> user, role, batch, document (SQLAlchemy)
+- routers/      -> auth, batches, documents, admin (endpoints)
+- schemas/      -> contratos de request/response (Pydantic)
+- services/     -> classifier.py (keywords), llm_client.py (IA),
+                   pdf_text.py (extraccion de texto)
+- config.py     -> Settings (BaseSettings)
+- database.py   -> engine, Session, Base, ensure_schema
+- security.py   -> hash y verificacion de JWT
+- bootstrap.py  -> seed de roles al arrancar
+- main.py       -> instancia de FastAPI, CORS, routers, /api/health
+
+frontend/src/
+- App.jsx
+- main.jsx
+- components/ui/    -> componentes shadcn/Radix
+- components/       -> PdfViewerDialog.jsx
+- lib/              -> pdfHighlights.js, utils.js
+- index.css         -> estilos globales
+
+
+4. COMUNICACION Y ENTORNO
+-------------------------
+
+- Frontend y backend corren en procesos separados.
+- Vite hace proxy de /api hacia http://127.0.0.1:8000 en desarrollo.
+- CORS en el backend permite http://localhost:5173 y http://127.0.0.1:5173.
+- Base de datos MySQL en 127.0.0.1:3306, schema pdf_classifier.
+- Archivos subidos se guardan en backend/uploads/<id-o-uuid>/<hash>_<nombre>.pdf
+- Esquema SQL de referencia: pdf_classifier.sql (raiz del repo)
+- Scripts: npm run dev / build / preview / lint (oxlint)
+
+
+5. HERRAMIENTAS COMPLEMENTARIAS
+-------------------------------
+
+- oxlint            -> linter de JavaScript (en lugar de ESLint)
+- pdfjs-dist 6      -> renderizado y resaltado de keywords en el PDF
+- Git               -> no inicializado en esta carpeta
+
+
+6. CATEGORIAS DEL CLASIFICADOR
+------------------------------
+
+- FACTURA
+- CONTRATO
+- FORMULARIO 110
+
+---
+
+Resumen en una linea:
+Python + FastAPI + SQLAlchemy + MySQL en el backend;
+React 19 + Vite 8 + Tailwind 4 + shadcn/ui + pdfjs-dist en el frontend;
+clasificacion hibrida por keywords con LLM opcional (OpenAI-compatible).

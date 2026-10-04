@@ -1,0 +1,62 @@
+# Hoja de Ruta: Implementación del Sistema de Clasificación de PDFs
+
+Para no abrumarte con la complejidad total del sistema, te sugiero un enfoque **incremental y modular**. No intentes construir todo a la vez; valida cada pieza antes de pasar a la siguiente.
+
+## Fase 1: Cimientos y Autenticación (El "esqueleto")
+*Objetivo: Tener un usuario que pueda entrar al sistema.*
+
+1.  **Entorno de Desarrollo:**
+    . Instala Python 3.10+ y Node.js.
+    . Levanta un contenedor de MySQL (usando Docker es lo más rápido).
+2.  **Backend Base:**
+	. Crea el proyecto fastapi y conecta SQLAlchemy para MySQL.
+    . Crea la tabla `users` (id, username, password_hash).
+3.  **Login:**
+    . Implementa el endpoint `/auth/login` con validación de contraseña usando `passlib` (bcrypt).
+    . Implementa la generación de Tokens JWT.
+4.  **Frontend Base:**
+    . Inicia el proyecto React + Tailwind.
+    . Crea la página de Login y guarda el token en `localStorage` o una Cookie.
+
+## Fase 2: Gestión de Archivos y Lotes (El "almacén")
+*Objetivo: Subir archivos y saber dónde están.*
+
+1.  **Base de Datos:**
+    . Crea la tabla `batches` (id, nombre_lote, fecha_creacion).
+    . Crea la tabla `documents` (id, batch_id, nombre_archivo, ruta_fisica, clasificacion).
+2.  **Lógica de Subida:**
+    . Implementa el endpoint `/documents/upload`.
+    . Crea una carpeta `uploads/` en el servidor para simular el "File Service".
+    . Valida que no suban más de 5 archivos por petición.
+3.  **Frontend de Carga:**
+    . Crea la vista de "Subida de Lotes" con un campo para el nombre del lote y un input de archivos múltiple.
+
+## Fase 3: Integración con IA (El "cerebro")
+*Objetivo: Que la IA lea el PDF y decida qué es.*
+
+1.  **Configuración de Ollama:**
+    . Asegúrate de que Ollama esté corriendo y el modelo `gemma4:31b.cloud` esté descargado.
+2.  **Extracción de Texto:**
+    . Integra la librería `PyMuPDF` (fitz) en el backend para convertir PDF $\rightarrow$ Texto plano.
+3.  **El Prompt de Clasificación:**
+    . Crea un servicio en el backend que tome el texto y lo envíe a Ollama.
+    . **Prompt sugerido:** *"Actúa como un experto contable. Analiza el siguiente texto de un documento y responde ÚNICAMENTE con una palabra: 'Contrato' o 'Factura'. Texto: [TEXTO_DEL_PDF]"*.
+4.  **Endpoint de Procesamiento:**
+    . Implementa `/documents/classify/{lote_id}` que recorra los archivos del lote y llame al servicio de IA.
+
+## Fase 4: Pulido y Experiencia de Usuario (El "acabado")
+*Objetivo: Que el sistema se sienta como una aplicación profesional.*
+
+1.  **Feedback Visual:**
+    . Añade "spinners" de carga en el frontend mientras la IA procesa los documentos.
+2.  **Vista de Resultados:**
+    . Crea una tabla donde el usuario pueda ver el lote, los archivos y la clasificación asignada por la IA.
+3.  **Manejo de Errores:**
+    . ¿Qué pasa si el PDF está protegido con contraseña? ¿Qué pasa si la IA no entiende el documento? Maneja estos casos.
+
+...
+
+## 🛠️ Resumen de herramientas para empezar HOY mismo:
+. **Backend:** `pip install fastapi uvicorn sqlalchemy pymysql PyJWT passlib[bcrypt] python.multipart pymupdf requests`
+. **Frontend:** `npx create.react.app frontend` $\rightarrow$ `npm install axios lucide.react` (para iconos).
+. **DB:** `docker run ..name mysql.pdf .e MYSQL_ROOT_PASSWORD=root .p 3306:3306 .d mysql:8.0`
