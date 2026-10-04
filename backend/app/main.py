@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-from .bootstrap import seed_roles
+from .bootstrap import seed_admin, seed_roles
 from .config import get_settings
 from .database import Base, engine, ensure_schema
 from .routers.admin import router as admin_router
@@ -19,6 +21,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     ensure_schema()
     seed_roles()
+    seed_admin()
     settings.uploads_path.mkdir(parents=True, exist_ok=True)
     yield
 
@@ -45,3 +48,9 @@ app.include_router(admin_documents_router)
 @app.get("/api/health")
 def health():
     return {"status": "ok", "version": settings.version}
+
+
+static_dir = Path(__file__).resolve().parent.parent / "static"
+
+if static_dir.is_dir():
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")

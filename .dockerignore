@@ -1,0 +1,11 @@
+.git
+.gitignore
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+backend/.env
+backend/uploads
+backend/pdf_ejemplos
+*.log
+modelo.png

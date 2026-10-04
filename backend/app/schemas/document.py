@@ -208,16 +208,16 @@ class AccionAplicada(BaseModel):
     observacion: DocumentReviewRead
 
 
-class AdminResumenRead(BaseModel):
-    total: int
-    por_estado: list[EstadoConteo] = []
-    por_usuario: list[UsuarioConteo] = []
-
-
 class UsuarioConteo(BaseModel):
     usuario_id: int | None = None
     usuario_nombre: str
     total: int
+
+
+class AdminResumenRead(BaseModel):
+    total: int
+    por_estado: list[EstadoConteo] = []
+    por_usuario: list[UsuarioConteo] = []
 
 
 class DocumentosPaginadosRead(BaseModel):

@@ -1,9 +1,31 @@
 from sqlalchemy import select
 
+from .config import get_settings
 from .database import SessionLocal
 from .models import Role, User, user_roles
+from .security import hash_password
 
 ROLES_DISPONIBLES = ("admin", "user")
+
+
+def seed_admin() -> None:
+    settings = get_settings()
+    username = settings.admin_username.strip()
+    password = settings.admin_password
+    if not username or not password:
+        return
+
+    with SessionLocal() as db:
+        existe = db.scalar(select(User).where(User.username == username))
+        if existe is not None:
+            return
+        rol_admin = db.scalar(select(Role).where(Role.nombre == "admin"))
+        if rol_admin is None:
+            return
+        admin = User(username=username, password_hash=hash_password(password))
+        admin.roles.append(rol_admin)
+        db.add(admin)
+        db.commit()
 
 
 def seed_roles() -> None:
